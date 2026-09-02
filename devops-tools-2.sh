@@ -1,112 +1,99 @@
 #!/usr/bin/env bash
 
 # ============================================================
-# DevOps Lab Bootstrap & Health Check
-# ============================================================
-# Instala e verifica ferramentas essenciais para um laboratório
-# DevOps.
+# DEVOPS TOOLS INSTALLER
+# Version: 2.0.0
 #
-# Características:
-#   - Idempotente
-#   - Evita reinstalações
-#   - Verifica serviços
-#   - Verifica ferramentas
-#   - Instala Docker, Terraform, Kubernetes, Helm, Kind, Ansible
-#   - Apresenta um resumo final do ambiente
+# Purpose:
+#   Bootstrap a professional DevOps / DevSecOps environment.
+#
+# Designed for:
+#   Ubuntu / Debian-based systems
+#   WSL2
+#   Linux VMs
+#
+# Principles:
+#   - Idempotent
+#   - Modular
+#   - Safe
+#   - Detect before installing
+#   - Validate after installation
+#   - Easy to extend
 #
 # ============================================================
 
 set -Eeuo pipefail
 
-readonly SCRIPT_NAME="$(basename "$0")"
-readonly SCRIPT_VERSION="2.0.0"
-
-readonly LOG_DIR="/var/log/devops-tool"
-readonly LOG_FILE="${LOG_DIR}/devops-tools.log"
-
-readonly CURRENT_USER="${SUDO_USER:-$USER}"
-readonly CURRENT_HOME="$(eval echo "~${CURRENT_USER}")"
-
 # ============================================================
-# CORES
+# CONFIGURATION
 # ============================================================
 
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly CYAN='\033[0;36m'
-readonly NC='\033[0m'
+SCRIPT_NAME="DevOps Tools Installer"
+VERSION="2.0.0"
+
+TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
+
+LOG_DIR="${HOME}/devops-tools-logs"
+LOG_FILE="${LOG_DIR}/install-${TIMESTAMP}.log"
+
+INSTALL_DIR="/usr/local/bin"
+
+TOTAL_TOOLS=0
+INSTALLED=0
+ALREADY_INSTALLED=0
+SKIPPED=0
+FAILED=0
+
+# ============================================================
+# COLORS
+# ============================================================
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+RESET='\033[0m'
 
 # ============================================================
 # LOGGING
 # ============================================================
 
-setup_logging() {
-
-    sudo install -d -m 0755 "$LOG_DIR"
-
-    if [[ ! -f "$LOG_FILE" ]]; then
-        sudo touch "$LOG_FILE"
-        sudo chown "$CURRENT_USER":"$CURRENT_USER" "$LOG_FILE"
-    fi
-}
+mkdir -p "$LOG_DIR"
 
 log() {
+    local message="$1"
 
-    local level="$1"
-    shift
-
-    local timestamp
-    timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
-
-    echo "[$timestamp] [$level] $*" | tee -a "$LOG_FILE"
+    echo -e "$message" | tee -a "$LOG_FILE"
 }
 
 info() {
-    echo -e "${BLUE}[INFO]${NC} $*"
+    log "${BLUE}[INFO]${RESET} $1"
 }
 
 success() {
-    echo -e "${GREEN}[ OK ]${NC} $*"
+    log "${GREEN}[OK]${RESET} $1"
 }
 
 warning() {
-    echo -e "${YELLOW}[WARN]${NC} $*"
+    log "${YELLOW}[WARNING]${RESET} $1"
 }
 
 error() {
-    echo -e "${RED}[ERROR]${NC} $*"
+    log "${RED}[ERROR]${RESET} $1"
 }
 
 section() {
-
-    echo
-    echo -e "${CYAN}============================================================${NC}"
-    echo -e "${CYAN} $*${NC}"
-    echo -e "${CYAN}============================================================${NC}"
-    echo
+    log ""
+    log "${CYAN}============================================================${RESET}"
+    log "${CYAN}$1${RESET}"
+    log "${CYAN}============================================================${RESET}"
 }
 
-# ============================================================
-# HEADER
-# ============================================================
-
-show_header() {
-
-    clear 2>/dev/null || true
-
-    echo
-    echo "============================================================"
-    echo "              DEVOPS LAB BOOTSTRAP"
-    echo "============================================================"
-    echo "Script      : $SCRIPT_NAME"
-    echo "Version     : $SCRIPT_VERSION"
-    echo "Host        : $(hostname)"
-    echo "User        : $CURRENT_USER"
-    echo "Date        : $(date '+%Y-%m-%d %H:%M:%S')"
-    echo "============================================================"
-    echo
+skip() {
+    ((SKIPPED+=1))
+    log "${YELLOW}[SKIP]${RESET} $1"
 }
 
 # ============================================================
@@ -116,71 +103,112 @@ show_header() {
 error_handler() {
 
     local exit_code=$?
+    local line="${BASH_LINENO[0]:-unknown}"
 
-    error "O script terminou com erro."
-    error "Linha: ${BASH_LINENO[0]}"
-    error "Código: $exit_code"
+    error "Falha inesperada na linha ${line}. Exit code: ${exit_code}"
 
-    log "ERROR" "Script failed with exit code $exit_code"
-
-    exit "$exit_code"
+    return "$exit_code"
 }
 
 trap error_handler ERR
 
 # ============================================================
-# CLEANUP
-# ============================================================
-
-cleanup() {
-
-    log "INFO" "Script finished"
-}
-
-trap cleanup EXIT
-
-# ============================================================
-# ROOT / SUDO
+# REQUIREMENTS
 # ============================================================
 
 check_sudo() {
 
-    if ! command -v sudo >/dev/null 2>&1; then
-        error "sudo não está instalado."
-        exit 1
-    fi
+    section "1. SYSTEM REQUIREMENTS"
 
-    if ! sudo -v; then
-        error "Não foi possível obter privilégios sudo."
+    if [[ "${EUID}" -eq 0 ]]; then
+
+        warning "O script está a ser executado como root."
+
+        warning "Recomendação: execute como utilizador normal."
+
+    elif command -v sudo >/dev/null 2>&1; then
+
+        success "sudo disponível."
+
+    else
+
+        error "sudo não está instalado."
+
         exit 1
     fi
 }
 
-# ============================================================
-# OS
-# ============================================================
-
 check_os() {
 
-    section "OPERATING SYSTEM"
-
     if [[ ! -f /etc/os-release ]]; then
-        error "/etc/os-release não encontrado."
+
+        error "Não foi possível identificar o sistema operativo."
+
         exit 1
     fi
 
-    # shellcheck disable=SC1091
     source /etc/os-release
 
-    echo "Distribution : ${PRETTY_NAME}"
-    echo "Kernel       : $(uname -r)"
-    echo "Architecture : $(dpkg --print-architecture)"
-    echo "Hostname     : $(hostname)"
-    echo "User         : $CURRENT_USER"
+    info "OS: ${PRETTY_NAME}"
 
-    if [[ "${ID:-}" != "ubuntu" ]]; then
-        warning "Este script foi desenvolvido principalmente para Ubuntu."
-        warning "Sistema detectado: ${PRETTY_NAME}"
+    if [[ "${ID}" != "ubuntu" && "${ID_LIKE:-}" != *"debian"* ]]; then
+
+        warning "Este script foi optimizado para Ubuntu/Debian."
+
+        warning "Distribuição detectada: ${ID}"
+    fi
+}
+
+check_architecture() {
+
+    local arch
+
+    arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+
+    info "Architecture: ${arch}"
+
+    case "$arch" in
+
+        amd64|x86_64)
+            success "Arquitectura x86_64/amd64 suportada."
+            ;;
+
+        arm64|aarch64)
+            warning "ARM64 detectado. Alguns binários poderão exigir instalação específica."
+            ;;
+
+        *)
+            warning "Arquitectura não testada: ${arch}"
+            ;;
+    esac
+}
+
+check_network() {
+
+    section "2. NETWORK"
+
+    if curl -fsSI --max-time 10 https://www.google.com >/dev/null 2>&1; then
+
+        success "Conectividade HTTPS funcionando."
+
+    else
+
+        error "Sem conectividade HTTPS."
+
+        error "Corrija a rede antes de continuar."
+
+        exit 1
+    fi
+
+    if getent hosts github.com >/dev/null 2>&1; then
+
+        success "DNS funcionando."
+
+    else
+
+        error "DNS não está funcionando."
+
+        exit 1
     fi
 }
 
@@ -190,35 +218,60 @@ check_os() {
 
 apt_update() {
 
-    section "APT UPDATE"
+    info "Atualizando índice APT..."
 
-    info "Actualizando índices dos repositórios..."
+    sudo apt-get update -y
+}
 
-    sudo apt-get update
+apt_install() {
 
-    success "APT actualizado."
+    local packages=("$@")
+
+    sudo DEBIAN_FRONTEND=noninteractive \
+        apt-get install -y "${packages[@]}"
 }
 
 # ============================================================
-# PACKAGE INSTALLER
+# GENERIC HELPERS
 # ============================================================
 
-install_package() {
+command_exists() {
 
-    local package="$1"
+    command -v "$1" >/dev/null 2>&1
+}
 
-    if dpkg-query -W -f='${Status}' "$package" 2>/dev/null \
-        | grep -q "install ok installed"; then
+install_apt_tool() {
 
-        success "$package já está instalado."
+    local name="$1"
+    shift
+
+    ((TOTAL_TOOLS+=1))
+
+    if command_exists "$name"; then
+
+        success "$name já está instalado."
+
+        ((ALREADY_INSTALLED+=1))
+
         return 0
     fi
 
-    info "A instalar: $package"
+    info "Instalando $name..."
 
-    sudo apt-get install -y "$package"
+    if apt_install "$@"; then
 
-    success "$package instalado."
+        success "$name instalado."
+
+        ((INSTALLED+=1))
+
+    else
+
+        error "Falha ao instalar $name."
+
+        ((FAILED+=1))
+
+        return 1
+    fi
 }
 
 # ============================================================
@@ -227,120 +280,166 @@ install_package() {
 
 install_base_tools() {
 
-    section "BASE DEVOPS TOOLS"
+    section "3. BASE LINUX TOOLS"
 
-    local packages=(
-        ca-certificates
-        curl
-        wget
-        gnupg
-        lsb-release
-        software-properties-common
-        apt-transport-https
-
-        git
-        openssh-client
-        openssh-server
-
-        vim
-        nano
-        tree
-        htop
-
-        unzip
-        zip
-        tar
-
-        net-tools
-        dnsutils
-        traceroute
-        nmap
-
-        jq
-        
-        build-essential
+    apt_install \
+        ca-certificates \
+        curl \
+        wget \
+        gnupg \
+        lsb-release \
+        apt-transport-https \
+        software-properties-common \
+        unzip \
+        zip \
+        tar \
+        gzip \
+        xz-utils \
+        tree \
+        jq \
+        vim \
+        nano \
+        less \
+        file \
+        rsync \
+        build-essential \
+        pkg-config \
         make
 
-        python3
-        python3-pip
-        python3-venv
-        pipx
-
-        shellcheck
-
-        tmux
-        rsync
-
-        cron
-    )
-
-    for package in "${packages[@]}"; do
-        install_package "$package"
-    done
+    success "Ferramentas base instaladas."
 }
 
 # ============================================================
-# PYTHON / PIPX
+# SYSTEM DIAGNOSTICS
 # ============================================================
 
-configure_python() {
+install_system_tools() {
 
-    section "PYTHON / PIPX"
+    section "4. SYSTEM DIAGNOSTICS"
 
-    if command -v pipx >/dev/null 2>&1; then
+    apt_install \
+        htop \
+        iotop \
+        lsof \
+        strace \
+        sysstat \
+        procps \
+        psmisc \
+        ncdu
 
-        info "Configurando PATH do pipx..."
+    success "Ferramentas de diagnóstico instaladas."
+}
 
-        sudo -u "$CURRENT_USER" pipx ensurepath \
-            >/dev/null 2>&1 || true
+# ============================================================
+# NETWORK TOOLS
+# ============================================================
 
-        success "pipx disponível."
+install_network_tools() {
+
+    section "5. NETWORKING TOOLS"
+
+    apt_install \
+        iproute2 \
+        iputils-ping \
+        net-tools \
+        netcat-openbsd \
+        dnsutils \
+        traceroute \
+        tcpdump \
+        nmap \
+        whois \
+        telnet
+
+    success "Ferramentas de networking instaladas."
+}
+
+# ============================================================
+# GIT
+# ============================================================
+
+install_git_tools() {
+
+    section "6. GIT / VERSION CONTROL"
+
+    install_apt_tool git git
+
+    install_apt_tool git-lfs git-lfs
+
+    if command_exists git-lfs; then
+
+        git lfs install >/dev/null 2>&1 || true
+
+        success "Git LFS configurado."
+    fi
+
+    info "Git version:"
+    git --version
+}
+
+# ============================================================
+# SSH
+# ============================================================
+
+install_ssh_tools() {
+
+    section "7. SSH"
+
+    install_apt_tool ssh openssh-client
+
+    install_apt_tool ssh-keygen openssh-client
+
+    info "SSH version:"
+    ssh -V 2>&1 || true
+}
+
+# ============================================================
+# GITHUB CLI
+# ============================================================
+
+install_github_cli() {
+
+    section "8. GITHUB CLI"
+
+    if command_exists gh; then
+
+        success "GitHub CLI já está instalado."
+        ((ALREADY_INSTALLED+=1))
+        return
+    fi
+
+    info "Instalando GitHub CLI..."
+
+    sudo mkdir -p -m 755 /etc/apt/keyrings
+
+    curl -fsSL \
+        https://cli.github.com/packages/githubcli-archive-keyring.gpg |
+        sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+        >/dev/null
+
+    sudo chmod go+r \
+        /etc/apt/keyrings/githubcli-archive-keyring.gpg
+
+    echo \
+        "deb [arch=$(dpkg --print-architecture) \
+        signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] \
+        https://cli.github.com/packages stable main" |
+        sudo tee /etc/apt/sources.list.d/github-cli.list \
+        >/dev/null
+
+    sudo apt-get update -y
+
+    if sudo apt-get install -y gh; then
+
+        success "GitHub CLI instalado."
+
+        ((INSTALLED+=1))
 
     else
 
-        warning "pipx não encontrado."
+        error "Falha ao instalar GitHub CLI."
+
+        ((FAILED+=1))
     fi
-}
-
-# ============================================================
-# DOCKER REPOSITORY
-# ============================================================
-
-configure_docker_repository() {
-
-    if [[ -f /etc/apt/sources.list.d/docker.sources ]]; then
-        success "Repositório Docker já configurado."
-        return 0
-    fi
-
-    info "Configurando repositório oficial do Docker..."
-
-    sudo install -m 0755 -d /etc/apt/keyrings
-
-    if [[ ! -f /etc/apt/keyrings/docker.asc ]]; then
-
-        sudo curl -fsSL \
-            https://download.docker.com/linux/ubuntu/gpg \
-            -o /etc/apt/keyrings/docker.asc
-
-        sudo chmod a+r /etc/apt/keyrings/docker.asc
-    fi
-
-    # shellcheck disable=SC1091
-    source /etc/os-release
-
-    local codename="${UBUNTU_CODENAME:-$VERSION_CODENAME}"
-
-    sudo tee /etc/apt/sources.list.d/docker.sources > /dev/null <<EOF
-Types: deb
-URIs: https://download.docker.com/linux/ubuntu
-Suites: ${codename}
-Components: stable
-Architectures: $(dpkg --print-architecture)
-Signed-By: /etc/apt/keyrings/docker.asc
-EOF
-
-    success "Repositório Docker configurado."
 }
 
 # ============================================================
@@ -349,41 +448,36 @@ EOF
 
 install_docker() {
 
-    section "DOCKER"
+    section "9. DOCKER"
 
-    if command -v docker >/dev/null 2>&1; then
+    if command_exists docker; then
 
         success "Docker já está instalado."
-        docker --version
 
     else
 
-        info "A preparar instalação do Docker..."
+        info "Configurando Docker official repository..."
 
-        # Remover pacotes que podem entrar em conflito
-        local conflicting_packages=(
-            docker.io
-            docker-compose
-            docker-compose-v2
-            docker-doc
-            docker-buildx
-            podman-docker
-        )
+        sudo install -m 0755 -d /etc/apt/keyrings
 
-        for package in "${conflicting_packages[@]}"; do
+        sudo curl -fsSL \
+            https://download.docker.com/linux/ubuntu/gpg \
+            -o /etc/apt/keyrings/docker.asc
 
-            if dpkg-query -W -f='${Status}' "$package" 2>/dev/null \
-                | grep -q "install ok installed"; then
+        sudo chmod a+r \
+            /etc/apt/keyrings/docker.asc
 
-                warning "Removendo pacote conflitante: $package"
+        source /etc/os-release
 
-                sudo apt-get remove -y "$package"
-            fi
-        done
+        echo \
+            "deb [arch=$(dpkg --print-architecture) \
+            signed-by=/etc/apt/keyrings/docker.asc] \
+            https://download.docker.com/linux/ubuntu \
+            ${VERSION_CODENAME} stable" |
+            sudo tee /etc/apt/sources.list.d/docker.list \
+            >/dev/null
 
-        configure_docker_repository
-
-        apt_update
+        sudo apt-get update -y
 
         sudo apt-get install -y \
             docker-ce \
@@ -395,32 +489,102 @@ install_docker() {
         success "Docker instalado."
     fi
 
-    # Activar Docker
-    sudo systemctl enable docker >/dev/null 2>&1 || true
-    sudo systemctl start docker
+    if command_exists docker; then
 
-    # Adicionar utilizador ao grupo docker
-    if getent group docker >/dev/null 2>&1; then
+        info "Docker version:"
+        docker --version
 
-        if id -nG "$CURRENT_USER" | grep -qw docker; then
-            success "$CURRENT_USER já pertence ao grupo docker."
-        else
-            sudo usermod -aG docker "$CURRENT_USER"
+        info "Docker Compose:"
+        docker compose version || true
 
-            warning "O utilizador $CURRENT_USER foi adicionado ao grupo docker."
-            warning "Será necessário terminar sessão e voltar a entrar para aplicar."
+        if getent group docker >/dev/null 2>&1; then
+
+            if id -nG "$USER" | grep -qw docker; then
+
+                success "Utilizador já pertence ao grupo docker."
+
+            else
+
+                warning "Utilizador ainda não pertence ao grupo docker."
+
+                sudo usermod -aG docker "$USER"
+
+                warning "Faça logout/login para aplicar a alteração."
+            fi
         fi
     fi
+}
 
-    echo
-    docker --version
+# ============================================================
+# PYTHON
+# ============================================================
 
-    if docker compose version >/dev/null 2>&1; then
-        docker compose version
+install_python_tools() {
+
+    section "10. PYTHON"
+
+    apt_install \
+        python3 \
+        python3-pip \
+        python3-venv \
+        python3-dev
+
+    if command_exists python3; then
+
+        success "Python instalado."
+
+        python3 --version
+        pip3 --version || true
+    fi
+}
+
+# ============================================================
+# NODE.JS
+# ============================================================
+
+install_node_tools() {
+
+    section "11. NODE.JS"
+
+    if command_exists node; then
+
+        success "Node.js já está instalado."
+
+        node --version
+
+    else
+
+        info "Node.js não encontrado."
+
+        info "Instalaremos Node.js através do NodeSource."
+
+        curl -fsSL \
+            https://deb.nodesource.com/setup_22.x |
+            sudo -E bash -
+
+        sudo apt-get install -y nodejs
+
+        success "Node.js instalado."
+
+        node --version
     fi
 
-    if docker buildx version >/dev/null 2>&1; then
-        docker buildx version
+    if command_exists npm; then
+
+        success "npm disponível."
+
+        npm --version
+    fi
+
+    if ! command_exists corepack; then
+
+        warning "Corepack não encontrado."
+
+    else
+
+        corepack enable >/dev/null 2>&1 || true
+
+        success "Corepack habilitado."
     fi
 }
 
@@ -428,173 +592,43 @@ install_docker() {
 # TERRAFORM
 # ============================================================
 
-configure_hashicorp_repository() {
-
-    if [[ -f /etc/apt/sources.list.d/hashicorp.list ]]; then
-        success "Repositório HashiCorp já configurado."
-        return 0
-    fi
-
-    info "Configurando repositório HashiCorp..."
-
-    sudo mkdir -p /usr/share/keyrings
-
-    if [[ ! -f /usr/share/keyrings/hashicorp-archive-keyring.gpg ]]; then
-
-        curl -fsSL \
-            https://apt.releases.hashicorp.com/gpg \
-            | sudo gpg --dearmor \
-            -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
-    fi
-
-    # shellcheck disable=SC1091
-    source /etc/os-release
-
-    local codename="${UBUNTU_CODENAME:-$VERSION_CODENAME}"
-
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com ${codename} main" \
-        | sudo tee /etc/apt/sources.list.d/hashicorp.list >/dev/null
-
-    success "Repositório HashiCorp configurado."
-}
-
 install_terraform() {
 
-    section "TERRAFORM"
+    section "12. TERRAFORM / IaC"
 
-    if command -v terraform >/dev/null 2>&1; then
+    if command_exists terraform; then
 
         success "Terraform já está instalado."
-        terraform version
 
-        return 0
+        terraform version | head -1
+
+        return
     fi
 
-    configure_hashicorp_repository
+    info "Configurando HashiCorp repository..."
 
-    apt_update
+    wget -O- \
+        https://apt.releases.hashicorp.com/gpg |
+        sudo gpg \
+            --dearmor \
+            -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+
+    echo \
+        "deb [arch=$(dpkg --print-architecture) \
+        signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
+        https://apt.releases.hashicorp.com \
+        $(grep -oP '(?<=UBUNTU_CODENAME=).*' /etc/os-release || lsb_release -cs) \
+        main" |
+        sudo tee /etc/apt/sources.list.d/hashicorp.list \
+        >/dev/null
+
+    sudo apt-get update -y
 
     sudo apt-get install -y terraform
 
     success "Terraform instalado."
 
-    terraform version
-}
-
-# ============================================================
-# KUBECTL
-# ============================================================
-
-install_kubectl() {
-
-    section "KUBERNETES / KUBECTL"
-
-    if command -v kubectl >/dev/null 2>&1; then
-
-        success "kubectl já está instalado."
-        kubectl version --client 2>/dev/null || true
-
-        return 0
-    fi
-
-    info "A instalar kubectl..."
-
-    local version
-
-    version="$(curl -L -s https://dl.k8s.io/release/stable.txt)"
-
-    curl -LO \
-        "https://dl.k8s.io/release/${version}/bin/linux/amd64/kubectl"
-
-    sudo install \
-        -o root \
-        -g root \
-        -m 0755 \
-        kubectl \
-        /usr/local/bin/kubectl
-
-    rm -f kubectl
-
-    success "kubectl instalado."
-
-    kubectl version --client
-}
-
-# ============================================================
-# HELM
-# ============================================================
-
-install_helm() {
-
-    section "HELM"
-
-    if command -v helm >/dev/null 2>&1; then
-
-        success "Helm já está instalado."
-        helm version
-
-        return 0
-    fi
-
-    info "A instalar Helm..."
-
-    curl -fsSL \
-        https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \
-        | bash
-
-    success "Helm instalado."
-
-    helm version
-}
-
-# ============================================================
-# KIND
-# ============================================================
-
-install_kind() {
-
-    section "KIND"
-
-    if command -v kind >/dev/null 2>&1; then
-
-        success "Kind já está instalado."
-        kind version
-
-        return 0
-    fi
-
-    info "A instalar Kind..."
-
-    local arch
-
-    arch="$(uname -m)"
-
-    case "$arch" in
-
-        x86_64)
-            arch="amd64"
-            ;;
-
-        aarch64)
-            arch="arm64"
-            ;;
-
-        *)
-            error "Arquitectura não suportada pelo Kind: $arch"
-            return 1
-            ;;
-    esac
-
-    curl -Lo kind \
-        "https://kind.sigs.k8s.io/dl/latest/kind-linux-${arch}"
-
-    chmod +x kind
-
-    sudo mv kind /usr/local/bin/kind
-
-    success "Kind instalado."
-
-    kind version
+    terraform version | head -1
 }
 
 # ============================================================
@@ -603,370 +637,762 @@ install_kind() {
 
 install_ansible() {
 
-    section "ANSIBLE"
+    section "13. ANSIBLE"
 
-    if command -v ansible >/dev/null 2>&1; then
-
-        success "Ansible já está instalado."
-        ansible --version | head -n 1
-
-        return 0
-    fi
-
-    info "A instalar Ansible..."
-
-    install_package ansible
+    apt_install \
+        ansible \
+        ansible-lint
 
     success "Ansible instalado."
 
-    ansible --version | head -n 1
+    ansible --version | head -1
+
+    if command_exists ansible-lint; then
+        ansible-lint --version
+    fi
 }
 
 # ============================================================
-# GITHUB CLI
+# KUBERNETES - KUBECTL
 # ============================================================
 
-install_gh() {
+install_kubectl() {
 
-    section "GITHUB CLI"
+    section "14. KUBERNETES - KUBECTL"
 
-    if command -v gh >/dev/null 2>&1; then
+    if command_exists kubectl; then
 
-        success "GitHub CLI já está instalado."
-        gh --version | head -n 1
+        success "kubectl já está instalado."
 
-        return 0
+        kubectl version --client 2>/dev/null | head -1 || true
+
+        return
     fi
 
-    info "A instalar GitHub CLI..."
+    info "Instalando kubectl..."
 
-    install_package gh
+    sudo install -m 0755 -d /etc/apt/keyrings
 
-    success "GitHub CLI instalado."
+    curl -fsSL \
+        https://pkgs.k8s.io/core:/stable:/v1.34/deb/Release.key |
+        sudo gpg \
+            --dearmor \
+            -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    echo \
+        'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] \
+        https://pkgs.k8s.io/core:/stable:/v1.34/deb/ /' |
+        sudo tee /etc/apt/sources.list.d/kubernetes.list \
+        >/dev/null
+
+    sudo apt-get update -y
+
+    sudo apt-get install -y kubectl
+
+    success "kubectl instalado."
+
+    kubectl version --client 2>/dev/null | head -1 || true
 }
 
 # ============================================================
-# SSH
+# HELM
 # ============================================================
 
-configure_ssh() {
+install_helm() {
 
-    section "SSH"
+    section "15. KUBERNETES - HELM"
 
-    if systemctl list-unit-files \
-        | grep -q '^ssh.service'; then
+    if command_exists helm; then
 
-        sudo systemctl enable ssh >/dev/null 2>&1 || true
-        sudo systemctl start ssh
+        success "Helm já está instalado."
 
-        success "SSH Server está activo."
+        helm version --short
 
-    elif systemctl list-unit-files \
-        | grep -q '^sshd.service'; then
+        return
+    fi
 
-        sudo systemctl enable sshd >/dev/null 2>&1 || true
-        sudo systemctl start sshd
+    info "Instalando Helm..."
 
-        success "SSH Server está activo."
+    curl -fsSL \
+        https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 |
+        bash
+
+    success "Helm instalado."
+
+    helm version --short
+}
+
+# ============================================================
+# KUSTOMIZE
+# ============================================================
+
+install_kustomize() {
+
+    section "16. KUBERNETES - KUSTOMIZE"
+
+    if command_exists kustomize; then
+
+        success "Kustomize já está instalado."
+
+        kustomize version
+
+        return
+    fi
+
+    info "Instalando Kustomize..."
+
+    local tmp_dir
+
+    tmp_dir="$(mktemp -d)"
+
+    curl -fsSL \
+        https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh |
+        bash -s -- "$tmp_dir"
+
+    if [[ -f "${tmp_dir}/kustomize" ]]; then
+
+        sudo install -m 0755 \
+            "${tmp_dir}/kustomize" \
+            "${INSTALL_DIR}/kustomize"
+
+        rm -rf "$tmp_dir"
+
+        success "Kustomize instalado."
+
+        kustomize version
 
     else
 
-        warning "Serviço SSH Server não encontrado."
-    fi
+        rm -rf "$tmp_dir"
 
-    if command -v ssh >/dev/null 2>&1; then
-        echo "SSH Client : $(ssh -V 2>&1)"
+        error "Falha ao instalar Kustomize."
+
+        ((FAILED+=1))
     fi
 }
 
 # ============================================================
-# CRON
+# K9S
 # ============================================================
 
-configure_cron() {
+install_k9s() {
 
-    section "CRON"
+    section "17. KUBERNETES - K9S"
 
-    if systemctl list-unit-files \
-        | grep -q '^cron.service'; then
+    if command_exists k9s; then
 
-        sudo systemctl enable cron >/dev/null 2>&1 || true
-        sudo systemctl start cron
+        success "K9s já está instalado."
 
-        success "Cron está activo."
+        k9s version 2>/dev/null || true
+
+        return
+    fi
+
+    warning "K9s não está disponível via APT padrão."
+
+    info "Instalando através do GitHub release."
+
+    local arch
+    local version
+    local tmp_dir
+
+    arch="$(uname -m)"
+
+    case "$arch" in
+        x86_64)
+            arch="amd64"
+            ;;
+        aarch64)
+            arch="arm64"
+            ;;
+        *)
+            error "Arquitectura não suportada para instalação automática do K9s."
+            return
+            ;;
+    esac
+
+    version="$(
+        curl -fsSL \
+        https://api.github.com/repos/derailed/k9s/releases/latest |
+        jq -r '.tag_name'
+    )"
+
+    tmp_dir="$(mktemp -d)"
+
+    curl -fsSL \
+        "https://github.com/derailed/k9s/releases/download/${version}/k9s_Linux_${arch}.tar.gz" \
+        -o "${tmp_dir}/k9s.tar.gz"
+
+    tar -xzf \
+        "${tmp_dir}/k9s.tar.gz" \
+        -C "$tmp_dir"
+
+    sudo install -m 0755 \
+        "${tmp_dir}/k9s" \
+        "${INSTALL_DIR}/k9s"
+
+    rm -rf "$tmp_dir"
+
+    success "K9s instalado."
+
+    k9s version 2>/dev/null || true
+}
+
+# ============================================================
+# SECURITY - TRIVY
+# ============================================================
+
+install_trivy() {
+
+    section "18. SECURITY - TRIVY"
+
+    if command_exists trivy; then
+
+        success "Trivy já está instalado."
+
+        trivy --version
+
+        return
+    fi
+
+    info "Instalando Trivy..."
+
+    local tmp_dir
+
+    tmp_dir="$(mktemp -d)"
+
+    curl -fsSL \
+        https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh |
+        sh -s -- -b "$tmp_dir"
+
+    sudo install -m 0755 \
+        "${tmp_dir}/trivy" \
+        "${INSTALL_DIR}/trivy"
+
+    rm -rf "$tmp_dir"
+
+    success "Trivy instalado."
+
+    trivy --version
+}
+
+# ============================================================
+# SECURITY - GITLEAKS
+# ============================================================
+
+install_gitleaks() {
+
+    section "19. SECURITY - GITLEAKS"
+
+    if command_exists gitleaks; then
+
+        success "Gitleaks já está instalado."
+
+        gitleaks version 2>/dev/null || true
+
+        return
+    fi
+
+    info "Instalando Gitleaks..."
+
+    local arch
+    local version
+    local tmp_dir
+
+    arch="$(uname -m)"
+
+    case "$arch" in
+        x86_64)
+            arch="x64"
+            ;;
+        aarch64)
+            arch="arm64"
+            ;;
+        *)
+            error "Arquitectura não suportada para Gitleaks."
+            return
+            ;;
+    esac
+
+    version="$(
+        curl -fsSL \
+        https://api.github.com/repos/gitleaks/gitleaks/releases/latest |
+        jq -r '.tag_name'
+    )"
+
+    tmp_dir="$(mktemp -d)"
+
+    curl -fsSL \
+        "https://github.com/gitleaks/gitleaks/releases/download/${version}/gitleaks_${version#v}_linux_${arch}.tar.gz" \
+        -o "${tmp_dir}/gitleaks.tar.gz"
+
+    tar -xzf \
+        "${tmp_dir}/gitleaks.tar.gz" \
+        -C "$tmp_dir"
+
+    sudo install -m 0755 \
+        "${tmp_dir}/gitleaks" \
+        "${INSTALL_DIR}/gitleaks"
+
+    rm -rf "$tmp_dir"
+
+    success "Gitleaks instalado."
+
+    gitleaks version 2>/dev/null || true
+}
+
+# ============================================================
+# CODE QUALITY - SHELLCHECK
+# ============================================================
+
+install_shellcheck() {
+
+    section "20. CODE QUALITY - SHELLCHECK"
+
+    install_apt_tool shellcheck shellcheck
+
+    if command_exists shellcheck; then
+
+        shellcheck --version | head -3
+    fi
+}
+
+# ============================================================
+# CODE QUALITY - HADOLINT
+# ============================================================
+
+install_hadolint() {
+
+    section "21. CODE QUALITY - HADOLINT"
+
+    if command_exists hadolint; then
+
+        success "Hadolint já está instalado."
+
+        hadolint --version
+
+        return
+    fi
+
+    info "Instalando Hadolint..."
+
+    local arch
+
+    arch="$(uname -m)"
+
+    case "$arch" in
+        x86_64)
+            arch="x86_64"
+            ;;
+        aarch64)
+            arch="aarch64"
+            ;;
+        *)
+            error "Arquitectura não suportada para Hadolint."
+            return
+            ;;
+    esac
+
+    sudo curl -fsSL \
+        "https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-${arch}" \
+        -o "${INSTALL_DIR}/hadolint"
+
+    sudo chmod +x "${INSTALL_DIR}/hadolint"
+
+    success "Hadolint instalado."
+
+    hadolint --version
+}
+
+# ============================================================
+# OPTIONAL: SKOPEO
+# ============================================================
+
+install_skopeo() {
+
+    section "22. CONTAINER REGISTRY - SKOPEO"
+
+    install_apt_tool skopeo skopeo
+
+    if command_exists skopeo; then
+
+        skopeo --version
+    fi
+}
+
+# ============================================================
+# OPTIONAL: SOPS
+# ============================================================
+
+install_sops() {
+
+    section "23. SECRETS - SOPS"
+
+    if command_exists sops; then
+
+        success "SOPS já está instalado."
+
+        sops --version
+
+        return
+    fi
+
+    warning "SOPS é uma ferramenta futura do laboratório."
+
+    info "Instalando SOPS para gestão segura de secrets."
+
+    local arch
+    local version
+    local tmp_dir
+
+    arch="$(uname -m)"
+
+    case "$arch" in
+        x86_64)
+            arch="amd64"
+            ;;
+        aarch64)
+            arch="arm64"
+            ;;
+        *)
+            error "Arquitectura não suportada para SOPS."
+            return
+            ;;
+    esac
+
+    version="$(
+        curl -fsSL \
+        https://api.github.com/repos/getsops/sops/releases/latest |
+        jq -r '.tag_name'
+    )"
+
+    tmp_dir="$(mktemp -d)"
+
+    curl -fsSL \
+        "https://github.com/getsops/sops/releases/download/${version}/sops-${version}.linux.${arch}" \
+        -o "${tmp_dir}/sops"
+
+    sudo install -m 0755 \
+        "${tmp_dir}/sops" \
+        "${INSTALL_DIR}/sops"
+
+    rm -rf "$tmp_dir"
+
+    success "SOPS instalado."
+
+    sops --version
+}
+
+# ============================================================
+# OPTIONAL: AGE
+# ============================================================
+
+install_age() {
+
+    section "24. SECRETS - AGE"
+
+    if command_exists age; then
+
+        success "age já está instalado."
+
+        age --version
+
+        return
+    fi
+
+    apt_install age
+
+    success "age instalado."
+
+    age --version
+}
+
+# ============================================================
+# FUTURE CLOUD TOOLS
+# ============================================================
+
+show_future_cloud_tools() {
+
+    section "25. FUTURE CLOUD TOOLS"
+
+    info "Cloud CLIs não serão instaladas automaticamente nesta versão."
+
+    log ""
+    log "Planeadas:"
+    log "  - AWS CLI"
+    log "  - Azure CLI"
+    log "  - Google Cloud CLI"
+    log ""
+    log "Motivo:"
+    log "  Instalar apenas a cloud necessária evita"
+    log "  aumentar desnecessariamente o ambiente."
+}
+
+# ============================================================
+# FUTURE GITOPS TOOLS
+# ============================================================
+
+show_future_gitops_tools() {
+
+    section "26. FUTURE GITOPS"
+
+    info "Ferramentas previstas para fases futuras:"
+
+    log "  - Argo CD CLI"
+    log "  - Flux CLI"
+    log "  - Argo Rollouts"
+}
+
+# ============================================================
+# FUTURE MONITORING
+# ============================================================
+
+show_monitoring_stack() {
+
+    section "27. MONITORING / OBSERVABILITY"
+
+    info "Estas ferramentas NÃO serão instaladas pelo APT."
+
+    log ""
+    log "A plataforma de observabilidade será executada"
+    log "preferencialmente através de Docker Compose/Kubernetes."
+    log ""
+    log "Planeadas:"
+    log "  - Prometheus"
+    log "  - Grafana"
+    log "  - Node Exporter"
+    log "  - cAdvisor"
+    log "  - Alertmanager"
+    log "  - Loki"
+    log "  - Blackbox Exporter"
+}
+
+# ============================================================
+# VALIDATION
+# ============================================================
+
+validate_tool() {
+
+    local tool="$1"
+
+    if command_exists "$tool"; then
+
+        success "Validation: ${tool} OK"
 
     else
 
-        warning "Cron service não encontrado."
+        warning "Validation: ${tool} NÃO encontrado."
     fi
 }
 
-# ============================================================
-# SYSTEM SERVICES
-# ============================================================
+validate_installation() {
 
-check_services() {
+    section "28. INSTALLATION VALIDATION"
 
-    section "SERVICES STATUS"
-
-    local services=(
-        docker
-        containerd
+    local tools=(
+        git
+        git-lfs
         ssh
-        cron
+        curl
+        wget
+        jq
+        docker
+        terraform
+        ansible
+        ansible-lint
+        kubectl
+        helm
+        kustomize
+        k9s
+        python3
+        pip3
+        node
+        npm
+        gh
+        trivy
+        gitleaks
+        shellcheck
+        hadolint
+        skopeo
+        sops
+        age
+        htop
+        lsof
+        strace
+        nc
+        dig
+        tcpdump
+        nmap
     )
 
-    printf "%-15s %-12s\n" "SERVICE" "STATUS"
-    printf "%-15s %-12s\n" "---------------" "------------"
+    for tool in "${tools[@]}"; do
 
-    for service in "${services[@]}"; do
+        validate_tool "$tool"
 
-        if systemctl list-unit-files \
-            | grep -q "^${service}.service"; then
-
-            if systemctl is-active --quiet "$service"; then
-                printf "%-15s ${GREEN}%-12s${NC}\n" \
-                    "$service" "RUNNING"
-            else
-                printf "%-15s ${RED}%-12s${NC}\n" \
-                    "$service" "STOPPED"
-            fi
-
-        else
-
-            printf "%-15s ${YELLOW}%-12s${NC}\n" \
-                "$service" "NOT FOUND"
-        fi
     done
-}
-
-# ============================================================
-# TOOL VERSION
-# ============================================================
-
-show_tool() {
-
-    local name="$1"
-    local command="$2"
-
-    if command -v "$command" >/dev/null 2>&1; then
-
-        local version
-
-        case "$command" in
-
-            docker)
-                version="$(docker --version 2>/dev/null)"
-                ;;
-
-            terraform)
-                version="$(terraform version 2>/dev/null | head -n 1)"
-                ;;
-
-            kubectl)
-                version="$(kubectl version --client 2>/dev/null | head -n 1)"
-                ;;
-
-            helm)
-                version="$(helm version --short 2>/dev/null)"
-                ;;
-
-            kind)
-                version="$(kind version 2>/dev/null)"
-                ;;
-
-            ansible)
-                version="$(ansible --version 2>/dev/null | head -n 1)"
-                ;;
-
-            git)
-                version="$(git --version 2>/dev/null)"
-                ;;
-
-            python3)
-                version="$(python3 --version 2>/dev/null)"
-                ;;
-
-            ssh)
-                version="$(ssh -V 2>&1)"
-                ;;
-
-            gh)
-                version="$(gh --version 2>/dev/null | head -n 1)"
-                ;;
-
-            *)
-                version="$("$command" --version 2>/dev/null | head -n 1)"
-                ;;
-        esac
-
-        printf "${GREEN}%-15s${NC} %s\n" "$name" "$version"
-
-    else
-
-        printf "${RED}%-15s${NC} NOT INSTALLED\n" "$name"
-    fi
-}
-
-# ============================================================
-# INSTALLED TOOLS SUMMARY
-# ============================================================
-
-show_installed_tools() {
-
-    section "DEVOPS TOOLCHAIN"
-
-    echo
-    printf "%-15s %s\n" "TOOL" "VERSION"
-    printf "%-15s %s\n" "---------------" "----------------------------------------"
-
-    show_tool "Git" "git"
-    show_tool "SSH" "ssh"
-    show_tool "Docker" "docker"
-    show_tool "Terraform" "terraform"
-    show_tool "kubectl" "kubectl"
-    show_tool "Helm" "helm"
-    show_tool "Kind" "kind"
-    show_tool "Ansible" "ansible"
-    show_tool "Python" "python3"
-    show_tool "GitHub CLI" "gh"
-
-    echo
-}
-
-# ============================================================
-# NETWORK
-# ============================================================
-
-check_network() {
-
-    section "NETWORK"
-
-    echo "Interfaces:"
-    ip -br addr
-
-    echo
-    echo "Default route:"
-
-    ip route | grep default || \
-        warning "Default route não encontrada."
-}
-
-# ============================================================
-# SYSTEM HEALTH
-# ============================================================
-
-check_system_health() {
-
-    section "SYSTEM HEALTH"
-
-    echo "Uptime:"
-    uptime
-
-    echo
-    echo "Memory:"
-    free -h
-
-    echo
-    echo "Disk:"
-    df -h /
-
-    local usage
-
-    usage="$(df / | awk 'NR==2 {print $5}' | tr -d '%')"
-
-    if (( usage >= 90 )); then
-
-        error "Disk usage crítico: ${usage}%"
-        log "ERROR" "Disk usage critical: ${usage}%"
-
-    elif (( usage >= 80 )); then
-
-        warning "Disk usage elevado: ${usage}%"
-        log "WARN" "Disk usage high: ${usage}%"
-
-    else
-
-        success "Disk usage saudável: ${usage}%"
-        log "INFO" "Disk usage healthy: ${usage}%"
-    fi
-
-    echo
-    echo "Top CPU processes:"
-    ps aux --sort=-%cpu | head -n 6
 }
 
 # ============================================================
 # DOCKER TEST
 # ============================================================
 
-test_docker() {
+validate_docker() {
 
-    section "DOCKER TEST"
+    section "29. DOCKER VALIDATION"
 
-    if ! command -v docker >/dev/null 2>&1; then
+    if ! command_exists docker; then
+
         warning "Docker não está disponível."
-        return 0
+
+        return
     fi
 
-    if ! systemctl is-active --quiet docker; then
-        warning "Docker não está activo."
-        return 0
-    fi
+    info "Docker:"
+    docker --version
+
+    info "Compose:"
+    docker compose version || true
 
     if docker info >/dev/null 2>&1; then
 
-        success "Docker Engine está funcional."
+        success "Docker daemon acessível."
 
     else
 
-        warning "Docker está instalado mas o utilizador actual ainda pode não ter a sessão do grupo docker."
-        warning "Se necessário, faça logout/login."
+        warning "Docker daemon não está acessível pelo utilizador atual."
+
+        warning "Se acabou de adicionar o utilizador ao grupo docker,"
+        warning "faça logout/login ou reinicie a sessão WSL."
+
+        info "Teste alternativo:"
+        info "sudo docker info"
     fi
 }
 
 # ============================================================
-# FINAL SUMMARY
+# SECURITY VALIDATION
 # ============================================================
 
-show_summary() {
+validate_security_tools() {
 
-    section "FINAL SUMMARY"
+    section "30. SECURITY VALIDATION"
 
-    echo "Host       : $(hostname)"
-    echo "User       : $CURRENT_USER"
-    echo "Date       : $(date '+%Y-%m-%d %H:%M:%S')"
+    if command_exists trivy; then
 
-    echo
-    echo "DevOps environment:"
-    echo
+        info "Trivy:"
+        trivy --version
+    fi
 
-    show_tool "Git" "git"
-    show_tool "SSH" "ssh"
-    show_tool "Docker" "docker"
-    show_tool "Terraform" "terraform"
-    show_tool "kubectl" "kubectl"
-    show_tool "Helm" "helm"
-    show_tool "Kind" "kind"
-    show_tool "Ansible" "ansible"
-    show_tool "Python" "python3"
-    show_tool "GitHub CLI" "gh"
+    if command_exists gitleaks; then
 
-    echo
-    echo "Services:"
-    echo
+        info "Gitleaks:"
+        gitleaks version 2>/dev/null || true
+    fi
 
-    check_services
+    if command_exists shellcheck; then
 
-    echo
-    echo "Log:"
-    echo "$LOG_FILE"
+        info "ShellCheck:"
+        shellcheck --version | head -3
+    fi
 
-    echo
-    echo "============================================================"
-    echo "        DEVOPS LAB CONFIGURATION COMPLETE"
-    echo "============================================================"
-    echo
+    if command_exists hadolint; then
+
+        info "Hadolint:"
+        hadolint --version
+    fi
+}
+
+# ============================================================
+# ENVIRONMENT SUMMARY
+# ============================================================
+
+show_environment_summary() {
+
+    section "31. ENVIRONMENT SUMMARY"
+
+    source /etc/os-release
+
+    log ""
+    log "Operating System : ${PRETTY_NAME}"
+    log "Kernel           : $(uname -r)"
+    log "Architecture     : $(uname -m)"
+    log "CPU              : $(nproc)"
+    log "User             : ${USER}"
+    log "Home             : ${HOME}"
+    log "Shell            : ${SHELL}"
+    log ""
+
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+
+        log "Environment      : WSL2"
+
+    else
+
+        log "Environment      : Linux / VM / Bare Metal"
+    fi
+}
+
+# ============================================================
+# SUMMARY
+# ============================================================
+
+show_final_summary() {
+
+    section "32. INSTALLATION SUMMARY"
+
+    log ""
+    log "Tools installed       : ${INSTALLED}"
+    log "Already installed     : ${ALREADY_INSTALLED}"
+    log "Skipped               : ${SKIPPED}"
+    log "Failed                : ${FAILED}"
+    log ""
+
+    if [[ "${FAILED}" -eq 0 ]]; then
+
+        success "DevOps environment bootstrap concluído."
+
+    else
+
+        error "A instalação terminou com ${FAILED} falha(s)."
+
+        warning "Consulte o log:"
+        log "${LOG_FILE}"
+    fi
+
+    log ""
+    log "Log file:"
+    log "${LOG_FILE}"
+
+    log ""
+
+    log "${CYAN}PRÓXIMOS PASSOS:${RESET}"
+
+    log ""
+    log "1. Reiniciar a sessão se o grupo docker foi alterado."
+    log ""
+    log "2. Testar Docker:"
+    log "   docker run hello-world"
+    log ""
+    log "3. Testar Kubernetes:"
+    log "   kubectl version --client"
+    log ""
+    log "4. Testar Terraform:"
+    log "   terraform version"
+    log ""
+    log "5. Testar Ansible:"
+    log "   ansible --version"
+    log ""
+    log "6. Testar segurança:"
+    log "   trivy --version"
+    log "   gitleaks version"
+    log ""
+    log "7. Testar qualidade:"
+    log "   shellcheck --version"
+    log "   hadolint --version"
+    log ""
+    log "8. Testar GitHub:"
+    log "   gh auth status"
+    log ""
 }
 
 # ============================================================
@@ -975,57 +1401,74 @@ show_summary() {
 
 main() {
 
-    show_header
+    section "DEVOPS TOOLS INSTALLER v${VERSION}"
 
     check_sudo
-    setup_logging
-
-    log "INFO" "Starting DevOps Lab Bootstrap"
-
     check_os
-
-    # --------------------------------------------------------
-    # 1. Base packages
-    # --------------------------------------------------------
+    check_architecture
+    check_network
 
     apt_update
+
     install_base_tools
 
-    # --------------------------------------------------------
-    # 2. DevOps tools
-    # --------------------------------------------------------
+    install_system_tools
+
+    install_network_tools
+
+    install_git_tools
+
+    install_ssh_tools
+
+    install_github_cli
 
     install_docker
+
+    install_python_tools
+
+    install_node_tools
+
     install_terraform
-    install_kubectl
-    install_helm
-    install_kind
+
     install_ansible
-    install_gh
 
-    # --------------------------------------------------------
-    # 3. Services
-    # --------------------------------------------------------
+    install_kubectl
 
-    configure_ssh
-    configure_cron
+    install_helm
 
-    # --------------------------------------------------------
-    # 4. Health checks
-    # --------------------------------------------------------
+    install_kustomize
 
-    check_network
-    check_system_health
-    test_docker
+    install_k9s
 
-    # --------------------------------------------------------
-    # 5. Final report
-    # --------------------------------------------------------
+    install_trivy
 
-    show_installed_tools
-    show_summary
+    install_gitleaks
 
-    log "INFO" "DevOps Lab Bootstrap completed successfully"
+    install_shellcheck
+
+    install_hadolint
+
+    install_skopeo
+
+    install_sops
+
+    install_age
+
+    show_future_cloud_tools
+
+    show_future_gitops_tools
+
+    show_monitoring_stack
+
+    validate_installation
+
+    validate_docker
+
+    validate_security_tools
+
+    show_environment_summary
+
+    show_final_summary
 }
 
 main "$@"
