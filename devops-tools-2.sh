@@ -223,6 +223,13 @@ apt_update() {
     sudo apt-get update -y
 }
 
+apt_upgrade() {
+
+    info "Fazendo upgrade do sistema..."
+
+    sudo apt-get upgrade -y
+}
+
 apt_install() {
 
     local packages=("$@")
@@ -674,16 +681,23 @@ install_kubectl() {
     sudo install -m 0755 -d /etc/apt/keyrings
 
     curl -fsSL \
-        https://pkgs.k8s.io/core:/stable:/v1.34/deb/Release.key |
-        sudo gpg \
-            --dearmor \
-            -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    	https://pkgs.k8s.io/core:/stable:/v1.34/deb/Release.key \
+    	-o /tmp/kubernetes-release.key
 
-    echo \
-        'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] \
-        https://pkgs.k8s.io/core:/stable:/v1.34/deb/ /' |
-        sudo tee /etc/apt/sources.list.d/kubernetes.list \
-        >/dev/null
+    gpg --dearmor --yes \
+    	--output /tmp/kubernetes-apt-keyring.gpg \
+    	/tmp/kubernetes-release.key
+
+    sudo install -m 0644 \
+    	/tmp/kubernetes-apt-keyring.gpg \
+    	/etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    rm -f /tmp/kubernetes-release.key \
+      	  /tmp/kubernetes-apt-keyring.gpg
+
+    echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] 
+    https://pkgs.k8s.io/core:/stable:/v1.34/deb/ /' |
+    	sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null
 
     sudo apt-get update -y
 
@@ -1409,6 +1423,8 @@ main() {
     check_network
 
     apt_update
+
+    apt_upgrade
 
     install_base_tools
 
